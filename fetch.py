@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-# fetch_webinars.py
-
 import json
 import os
 import time
@@ -10,7 +8,8 @@ import requests
 
 API_URL = "https://www.sans.org/api/algolia"
 INDEX_NAME = "webinar_single_startDateTimestamp_asc"
-STATE_FILE = "state.json"
+
+DATA_FILE = "data.json"  # canonical webinar data (no user state)
 
 # --- CySA+ keyword mapping -----------------------------------------------
 
@@ -151,20 +150,9 @@ CYSA_KEYWORD_MAP = {
 }
 
 
-def load_existing_state() -> Dict[str, Any]:
-    if not os.path.exists(STATE_FILE):
-        return {"webinars": []}
-
-    with open(STATE_FILE, "r", encoding="utf-8") as f:
-        try:
-            return json.load(f)
-        except json.JSONDecodeError:
-            return {"webinars": []}
-
-
-def save_state(state: Dict[str, Any]) -> None:
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump(state, f, indent=2, ensure_ascii=False)
+def save_data(webinars: List[Dict[str, Any]]) -> None:
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump({"webinars": webinars}, f, indent=2, ensure_ascii=False)
 
 
 def build_payload(page: int, archived_before_ts: int) -> Dict[str, Any]:
@@ -201,7 +189,7 @@ def fetch_page(
         "content-type": "application/json",
         "origin": "https://www.sans.org",
         "referer": "https://www.sans.org/webcasts",
-        "user-agent": "Mozilla/5.0 (compatible; sans-archive-scraper/1.0)",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
     }
 
     resp = session.post(API_URL, json=payload, headers=headers, timeout=20)
@@ -229,6 +217,19 @@ def compute_duration_hours(hit: Dict[str, Any]) -> float | None:
         return None
 
     return duration_seconds / 3600.0
+
+
+def compute_duration_bucket(hours: float) -> int:
+    """
+    Duration bucket:
+      0 => < 1 hour
+      1 => [1, 2)
+      2 => [2, 3)
+      etc.
+    """
+    if hours < 1.0:
+        return 0
+    return int(hours)  # floor: 1h-1.99 => 1, 2h-2.99 => 2, etc.
 
 
 def format_duration_label(hours: float) -> str:
@@ -261,14 +262,6 @@ def map_cysa_tags(title: str, description: str = "") -> list[str]:
 
 def main() -> None:
     now_ts = int(time.time())
-
-    existing_state = load_existing_state()
-    existing_by_id = {
-        w.get("objectID"): w
-        for w in existing_state.get("webinars", [])
-        if w.get("objectID")
-    }
-
     session = requests.Session()
 
     page = 0
@@ -292,31 +285,33 @@ def main() -> None:
             if duration_hours is None:
                 continue
 
-            object_id = hit.get("objectID")
-            prev = existing_by_id.get(object_id, {})
-
             title = (hit.get("title") or "").strip()
-            cysa_tags = map_cysa_tags(title)
+            description = hit.get("description") or ""
+            cysa_tags = map_cysa_tags(title, description)
+
+            duration_bucket = compute_duration_bucket(duration_hours)
 
             record = {
-                "objectID": object_id,
+                "objectID": hit.get("objectID"),
                 "webcastId": hit.get("webcastId"),
                 "title": title,
                 "url": "https://www.sans.org" + (hit.get("url") or ""),
+                "description": description,
                 "startDate": hit.get("startDate"),
                 "startTime": hit.get("startTime"),
                 "endDate": hit.get("endDate"),
                 "endTime": hit.get("endTime"),
                 "duration_hours": duration_hours,
                 "duration_label": format_duration_label(duration_hours),
-                "duration_bucket": int(round(duration_hours)),  # 1h, 2h, 3h, etc.
+                "duration_bucket": duration_bucket,  # 0=<1h, 1≈1h, 2≈2h, etc.
                 "type": hit.get("type"),
                 "focusAreas": hit.get("facets", {}).get("focusArea", []),
                 "language": hit.get("language", []),
+                "createdAt": hit.get("createdAt"),
+                "createdAtTimestamp": hit.get("createdAtTimestamp"),
+                "updatedAt": hit.get("updatedAt"),
+                "updatedAtTimestamp": hit.get("updatedAtTimestamp"),
                 "cysa_tags": cysa_tags,
-                # Preserve flags from previous runs
-                "watched": bool(prev.get("watched", False)),
-                "favorite": bool(prev.get("favorite", False)),  # NEW
             }
 
             webinars.append(record)
@@ -325,9 +320,8 @@ def main() -> None:
         if page >= nb_pages:
             break
 
-    state = {"webinars": webinars}
-    save_state(state)
-    print(f"Saved {len(webinars)} webinars to {STATE_FILE}")
+    save_data(webinars)
+    print(f"Saved {len(webinars)} webinars to {DATA_FILE}")
 
 
 if __name__ == "__main__":
