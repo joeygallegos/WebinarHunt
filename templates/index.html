@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en" x-data="webinarsApp()">
+
+<head>
+    <meta charset="UTF-8" />
+    <title>SANS Webinar Archive – Duration Picker</title>
+
+    <!-- Tailwind (CDN) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Alpine.js -->
+    <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+
+    <script>
+        window.INITIAL_WEBINARS = {{ webinars | tojson }};
+    </script>
+
+    <style>
+        .row-watched {
+            opacity: 0.55;
+        }
+    </style>
+</head>
+
+<body class="bg-slate-900 text-slate-100 min-h-screen">
+    <div class="max-w-6xl mx-auto px-4 py-6 space-y-6">
+
+        <header class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div>
+                <h1 class="text-2xl font-semibold">SANS Webinar Archive</h1>
+                <p class="text-sm text-slate-300">
+                    Focus on 1–3 hour sessions, mark watched, flag favorites, and pull CySA+-relevant content.
+                </p>
+            </div>
+
+            <div class="flex flex-wrap gap-3 items-center">
+                <div>
+                    <label class="block text-xs uppercase text-slate-400 mb-1">Sort by</label>
+                    <select class="bg-slate-800 text-slate-100 text-sm rounded px-2 py-1 border border-slate-700"
+                        x-model="sortMode">
+                        <option value="duration">Duration (1h → 3h → ...)</option>
+                        <option value="title">Title (A → Z)</option>
+                        <option value="watched">Watched status</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label class="block text-xs uppercase text-slate-400 mb-1">Filter duration</label>
+                    <select class="bg-slate-800 text-slate-100 text-sm rounded px-2 py-1 border border-slate-700"
+                        x-model.number="durationFilter">
+                        <option value="0">All durations</option>
+                        <option value="1">≈ 1 hour</option>
+                        <option value="2">≈ 2 hours</option>
+                        <option value="3">≈ 3 hours</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label class="block text-xs uppercase text-slate-400 mb-1">Watched</label>
+                    <select class="bg-slate-800 text-slate-100 text-sm rounded px-2 py-1 border border-slate-700"
+                        x-model="watchedFilter">
+                        <option value="all">All</option>
+                        <option value="unwatched">Unwatched only</option>
+                        <option value="watched">Watched only</option>
+                    </select>
+                </div>
+            </div>
+        </header>
+
+        <!-- Extra filter buttons row -->
+        <section class="flex flex-wrap gap-3 items-center text-sm">
+            <button type="button" class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border transition
+                     border-slate-600 hover:bg-slate-800/80"
+                :class="favoritesOnly ? 'bg-amber-500/20 border-amber-400 text-amber-200' : 'text-slate-200'"
+                @click="favoritesOnly = !favoritesOnly">
+                <span x-text="favoritesOnly ? 'Showing favorites only' : 'Filter: favorites/watch later'"></span>
+            </button>
+
+            <button type="button" class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border transition
+                     border-slate-600 hover:bg-slate-800/80"
+                :class="cysaOnly ? 'bg-emerald-500/20 border-emerald-400 text-emerald-200' : 'text-slate-200'"
+                @click="cysaOnly = !cysaOnly">
+                <span x-text="cysaOnly ? 'Showing CySA+ mapped only' : 'Filter: CySA+-mapped items only'"></span>
+            </button>
+        </section>
+
+        <section class="bg-slate-800/70 border border-slate-700 rounded-xl shadow-lg overflow-hidden">
+            <div class="px-4 py-3 flex items-center justify-between border-b border-slate-700">
+                <div class="text-sm text-slate-300">
+                    <span x-text="filteredWebinars.length"></span> webinars shown
+                    <template x-if="durationFilter">
+                        <span> • Bucket: <span x-text="durationFilter + 'h'"></span></span>
+                    </template>
+                    <template x-if="favoritesOnly">
+                        <span> • Favorites only</span>
+                    </template>
+                    <template x-if="cysaOnly">
+                        <span> • CySA+ only</span>
+                    </template>
+                </div>
+                <div class="text-xs text-slate-400">
+                    Check a box to mark watched. Star an item to save it as “watch later.”
+                </div>
+            </div>
+
+            <div class="divide-y divide-slate-700 max-h-[70vh] overflow-y-auto">
+                <template x-for="w in sortedWebinars" :key="w.objectID">
+                    <div class="px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-3"
+                        :class="w.watched ? 'row-watched bg-slate-800/60' : 'bg-slate-800/30'">
+
+                        <div class="flex items-start gap-3 flex-1">
+                            <!-- Watched checkbox -->
+                            <div class="mt-1 flex flex-col items-center gap-2">
+                                <input type="checkbox"
+                                    class="h-4 w-4 rounded border-slate-500 bg-slate-900 text-emerald-500 focus:ring-emerald-500"
+                                    :checked="w.watched" @change="toggleWatched(w, $event.target.checked)">
+
+                                <!-- Favorite "star" button -->
+                                <button type="button" class="text-lg leading-none"
+                                    :class="w.favorite ? 'text-amber-300' : 'text-slate-500 hover:text-amber-200'"
+                                    @click="toggleFavorite(w, !w.favorite)" title="Toggle favorite / watch later">
+                                    <span x-text="w.favorite ? '★' : '☆'"></span>
+                                </button>
+                            </div>
+
+                            <!-- Main info -->
+                            <div class="space-y-1">
+                                <div class="flex items-center gap-2 flex-wrap">
+                                    <a :href="w.url" target="_blank"
+                                        class="text-sm sm:text-base font-semibold hover:text-emerald-400 transition-colors"
+                                        x-text="w.title"></a>
+
+                                    <span class="text-xs px-2 py-0.5 rounded-full bg-slate-700 text-slate-100"
+                                        x-text="w.duration_label + ' (~' + w.duration_hours.toFixed(2) + 'h)'"></span>
+
+                                    <template x-if="w.watched">
+                                        <span
+                                            class="text-[0.7rem] uppercase tracking-wide px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300">
+                                            Watched
+                                        </span>
+                                    </template>
+
+                                    <template x-if="w.favorite">
+                                        <span
+                                            class="text-[0.7rem] uppercase tracking-wide px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-200">
+                                            Watch later
+                                        </span>
+                                    </template>
+                                </div>
+
+                                <div class="text-xs text-slate-300">
+                                    <span x-text="w.startDate || 'N/A'"></span>
+                                    <template x-if="w.startTime">
+                                        <span>
+                                            • <span x-text="w.startTime"></span>–<span x-text="w.endTime || ''"></span>
+                                        </span>
+                                    </template>
+                                    <template x-if="w.type">
+                                        <span> • <span x-text="w.type"></span></span>
+                                    </template>
+                                </div>
+
+                                <div class="flex flex-wrap gap-1 mt-1">
+                                    <template x-for="fa in (w.focusAreas || [])" :key="fa">
+                                        <span
+                                            class="text-[0.7rem] px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-200"
+                                            x-text="fa"></span>
+                                    </template>
+                                    <template x-for="tag in (w.cysa_tags || [])" :key="tag">
+                                        <span
+                                            class="text-[0.7rem] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-200"
+                                            x-text="tag"></span>
+                                    </template>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Right-side quick actions / meta -->
+                        <div class="flex sm:flex-col gap-2 sm:items-end text-xs text-slate-300">
+                            <div>
+                                Bucket:
+                                <span class="font-mono" x-text="w.duration_bucket + 'h'"></span>
+                            </div>
+
+                            <button type="button"
+                                class="inline-flex items-center gap-1 px-2 py-1 rounded border border-slate-600 text-slate-200 hover:bg-slate-700/80 text-xs"
+                                @click="toggleWatched(w, !w.watched)">
+                                <span x-text="w.watched ? 'Mark unwatched' : 'Mark watched'"></span>
+                            </button>
+                        </div>
+
+                    </div>
+                </template>
+            </div>
+        </section>
+    </div>
+
+    <script>
+        function webinarsApp()
+        {
+            return {
+                webinars: window.INITIAL_WEBINARS || [],
+                sortMode: 'duration',          // 'duration' | 'title' | 'watched'
+                durationFilter: 0,             // 0 = all, 1/2/3 = bucket
+                watchedFilter: 'all',          // 'all' | 'watched' | 'unwatched'
+                favoritesOnly: false,          // NEW
+                cysaOnly: false,               // NEW
+
+                get filteredWebinars()
+                {
+                    return this.webinars.filter(w =>
+                    {
+                        // Duration bucket filter
+                        if (this.durationFilter && Number(w.duration_bucket) !== this.durationFilter)
+                        {
+                            return false;
+                        }
+
+                        // Watched filter
+                        if (this.watchedFilter === 'watched' && !w.watched) return false;
+                        if (this.watchedFilter === 'unwatched' && w.watched) return false;
+
+                        // Favorites only filter
+                        if (this.favoritesOnly && !w.favorite) return false;
+
+                        // CySA+ only filter (needs at least one CySA+ tag)
+                        if (this.cysaOnly)
+                        {
+                            const tags = w.cysa_tags || [];
+                            if (!tags.length) return false;
+                        }
+
+                        // Keep 1–3.5h range by default so you don't get 8-hour monsters
+                        const h = Number(w.duration_hours || 0);
+                        if (h <= 0 || h > 3.5) return false;
+
+                        return true;
+                    });
+                },
+
+                get sortedWebinars()
+                {
+                    const list = this.filteredWebinars.slice();
+
+                    if (this.sortMode === 'title')
+                    {
+                        list.sort((a, b) =>
+                            (a.title || '').toLowerCase().localeCompare((b.title || '').toLowerCase())
+                        );
+                    } else if (this.sortMode === 'watched')
+                    {
+                        // Unwatched first, then watched; then duration bucket
+                        list.sort((a, b) =>
+                        {
+                            if (a.watched === b.watched)
+                            {
+                                const ab = Number(a.duration_bucket || 999);
+                                const bb = Number(b.duration_bucket || 999);
+                                if (ab === bb)
+                                {
+                                    return (a.title || '').toLowerCase().localeCompare((b.title || '').toLowerCase());
+                                }
+                                return ab - bb;
+                            }
+                            return (a.watched ? 1 : 0) - (b.watched ? 1 : 0);
+                        });
+                    } else
+                    {
+                        // Default: duration bucket, then hours, then title
+                        list.sort((a, b) =>
+                        {
+                            const ab = Number(a.duration_bucket || 999);
+                            const bb = Number(b.duration_bucket || 999);
+                            if (ab !== bb) return ab - bb;
+
+                            const ah = Number(a.duration_hours || 999);
+                            const bh = Number(b.duration_hours || 999);
+                            if (ah !== bh) return ah - bh;
+
+                            return (a.title || '').toLowerCase().localeCompare((b.title || '').toLowerCase());
+                        });
+                    }
+
+                    return list;
+                },
+
+                async toggleWatched(w, checked)
+                {
+                    w.watched = checked;
+
+                    try
+                    {
+                        const res = await fetch('/api/toggle-watched', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ objectID: w.objectID, watched: checked })
+                        });
+                        const data = await res.json();
+                        if (!data.ok)
+                        {
+                            console.error('Failed to save watched state:', data.error);
+                        }
+                    } catch (err)
+                    {
+                        console.error('Error saving watched state', err);
+                    }
+                },
+
+                async toggleFavorite(w, fav)
+                {
+                    w.favorite = fav;
+
+                    try
+                    {
+                        const res = await fetch('/api/toggle-favorite', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ objectID: w.objectID, favorite: fav })
+                        });
+                        const data = await res.json();
+                        if (!data.ok)
+                        {
+                            console.error('Failed to save favorite state:', data.error);
+                        }
+                    } catch (err)
+                    {
+                        console.error('Error saving favorite state', err);
+                    }
+                }
+            };
+        }
+    </script>
+</body>
+
+</html>
